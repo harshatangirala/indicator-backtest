@@ -2,6 +2,12 @@
 app.py — Streamlit dashboard for the 15-indicator combination backtest.
 
 Reads ONLY from data/backtest_results.parquet (produced by `python engine.py`).
+Never loads the full 1.29M-row table into memory: every query uses parquet
+predicate pushdown (`pd.read_parquet(..., filters=...)`) to pull only the
+small slice a given tab needs (a few thousand rows at most), which is what
+keeps this comfortably inside Streamlit Community Cloud's free-tier memory
+limit.
+
 Run with:
     streamlit run app.py
 """
@@ -24,16 +30,45 @@ METRIC_OPTIONS = {
     "CAGR": "cagr",
 }
 
+DISPLAY_COLS = ["combo", "n_indicators", "logic", "win_rate", "total_return",
+                "sharpe", "profit_factor", "cagr", "num_trades"]
 
-@st.cache_data
-def load_results(path: str) -> pd.DataFrame:
-    df = pd.read_parquet(path)
+
+def _stringify(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert category columns to plain str — safe here because every caller
+    already filtered down to a small slice (thousands of rows, not millions)."""
     for col in ("combo", "logic", "scope"):
-        df[col] = df[col].astype(str)
+        if col in df.columns:
+            df[col] = df[col].astype(str)
     return df
 
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
+def load_scopes(path: str) -> list[str]:
+    """Just the distinct stock/overall labels — a single cheap column scan."""
+    col = pd.read_parquet(path, columns=["scope"])["scope"]
+    return sorted(col.astype(str).unique())
+
+
+@st.cache_data(show_spinner=False)
+def load_overall(path: str) -> pd.DataFrame:
+    df = pd.read_parquet(path, filters=[("scope", "==", "OVERALL")])
+    return _stringify(df)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def load_stock(path: str, ticker: str) -> pd.DataFrame:
+    df = pd.read_parquet(path, filters=[("scope", "==", ticker)])
+    return _stringify(df)
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def load_combo(path: str, combo_str: str, logic: str) -> pd.DataFrame:
+    df = pd.read_parquet(path, filters=[("combo", "==", combo_str), ("logic", "==", logic)])
+    return _stringify(df)
+
+
+@st.cache_data(show_spinner=False)
 def load_universe_names(path: str) -> dict:
     uni = pd.read_csv(path)
     uni["yf_ticker"] = uni["Symbol"].str.strip().str.replace("&", "%26", regex=False) + ".NS"
@@ -68,9 +103,9 @@ if not Path(RESULTS_PATH).exists():
     )
     st.stop()
 
-results = load_results(str(RESULTS_PATH))
+results_path_str = str(RESULTS_PATH)
 name_map = load_universe_names(str(UNIVERSE_CSV)) if Path(UNIVERSE_CSV).exists() else {}
-all_tickers = sorted(t for t in results["scope"].unique() if t != "OVERALL")
+all_tickers = [t for t in load_scopes(results_path_str) if t != "OVERALL"]
 
 tab_global, tab_stock, tab_explorer = st.tabs(
     ["🌐 Global Overview", "🏢 Stock Analysis", "🧩 Strategy Explorer"]
@@ -93,18 +128,16 @@ with tab_global:
         )
 
     metric_col = METRIC_OPTIONS[metric_label]
-    overall = results[results["scope"] == "OVERALL"].copy()
+    overall = load_overall(results_path_str)
     if logic_filter != "Both":
         overall = overall[overall["logic"] == logic_filter]
     overall = overall[overall["n_indicators"].isin(n_ind_filter)]
     overall = overall.dropna(subset=[metric_col])
 
     top10 = overall.sort_values(metric_col, ascending=False).head(10)
-    display_cols = ["combo", "n_indicators", "logic", "win_rate", "total_return",
-                     "sharpe", "profit_factor", "cagr", "num_trades"]
 
     st.dataframe(
-        style_pct_cols(top10[display_cols].set_index("combo"),
+        style_pct_cols(top10[DISPLAY_COLS].set_index("combo"),
                        ["win_rate", "total_return", "cagr"]),
         use_container_width=True,
     )
@@ -135,14 +168,14 @@ with tab_stock:
         s_logic_filter = st.selectbox("Logic", ["Both"] + list(LOGICS), key="s_logic")
 
     s_metric_col = METRIC_OPTIONS[s_metric_label]
-    stock_df = results[results["scope"] == chosen_ticker].copy()
+    stock_df = load_stock(results_path_str, chosen_ticker)
     if s_logic_filter != "Both":
         stock_df = stock_df[stock_df["logic"] == s_logic_filter]
     stock_df = stock_df.dropna(subset=[s_metric_col])
 
     top5 = stock_df.sort_values(s_metric_col, ascending=False).head(5)
     st.dataframe(
-        style_pct_cols(top5[display_cols].set_index("combo"),
+        style_pct_cols(top5[DISPLAY_COLS].set_index("combo"),
                        ["win_rate", "total_return", "cagr"]),
         use_container_width=True,
     )
@@ -179,7 +212,7 @@ with tab_explorer:
         st.info("Pick at least one indicator above to see its backtest results.")
     else:
         combo_str = "+".join(sorted(selected, key=INDICATOR_NAMES.index))
-        combo_rows = results[(results["combo"] == combo_str) & (results["logic"] == e_logic)]
+        combo_rows = load_combo(results_path_str, combo_str, e_logic)
 
         if combo_rows.empty:
             st.warning(

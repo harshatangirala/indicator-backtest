@@ -18,7 +18,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from engine import INDICATOR_NAMES, LOGICS, RESULTS_PATH, UNIVERSE_CSV
+from constants import INDICATOR_NAMES, LOGICS, RESULTS_PATH, UNIVERSE_CSV
 
 st.set_page_config(page_title="Indicator Combo Backtester", layout="wide", page_icon="📈")
 

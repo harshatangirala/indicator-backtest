@@ -34,29 +34,11 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-# --------------------------------------------------------------------------- #
-# Config
-# --------------------------------------------------------------------------- #
-
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-UNIVERSE_CSV = DATA_DIR / "universe" / "master_stock_universe.csv"
-OHLCV_CACHE_DIR = DATA_DIR / "cache" / "ohlcv"
-SIGNALS_CACHE_DIR = DATA_DIR / "cache" / "signals"
-RESULTS_PATH = DATA_DIR / "backtest_results.parquet"
-
-START_DATE = "2009-01-01"
-END_DATE = "2026-06-26"
-
-MIN_ROWS = 100  # skip tickers with less history than this (warm-up + viability)
-TRADING_DAYS_PER_YEAR = 252
-
-INDICATOR_NAMES = [
-    "SMA", "EMA", "MACD", "PSAR", "RSI", "STOCH", "CCI", "ROC",
-    "BBANDS", "ATR", "SUPERTREND", "OBV", "CMF", "VRSI", "ICHIMOKU",
-]
-N_INDICATORS = len(INDICATOR_NAMES)
-LOGICS = ("AND", "MAJORITY")
+from constants import (
+    BASE_DIR, DATA_DIR, UNIVERSE_CSV, OHLCV_CACHE_DIR, SIGNALS_CACHE_DIR,
+    RESULTS_PATH, START_DATE, END_DATE, MIN_ROWS, TRADING_DAYS_PER_YEAR,
+    INDICATOR_NAMES, N_INDICATORS, LOGICS,
+)
 
 logging.basicConfig(
     level=logging.INFO,

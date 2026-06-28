@@ -1,0 +1,5 @@
+# Extra dependencies needed only to run engine.py (the backtest pipeline),
+# not the deployed dashboard. Install with:
+#   pip install -r requirements.txt -r requirements-engine.txt
+numpy>=1.26
+yfinance>=0.2.40

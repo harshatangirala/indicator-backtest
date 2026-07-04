@@ -578,9 +578,12 @@ def run_backtest(signals_all: np.ndarray, returns_all: np.ndarray,
                 rows.append({"combo": combo_str, "n_indicators": n_ind,
                              "logic": logic, "scope": ticker, **m})
 
-            # Overall: equal-weighted cross-sectional mean return per day
+            # Overall: equal-weighted cross-sectional return.
+            # Use sign(mean_position) as the position so trade-count metrics
+            # (num_trades, avg_hold_days) reflect majority-consensus direction
+            # changes, not the float drift of averaging 300+ individual signals.
             agg_ret = np.nanmean(strat_ret, axis=1)
-            agg_pos = np.nanmean(position,  axis=1)
+            agg_pos = np.sign(np.nanmean(position, axis=1)).astype(np.float32)
             m = compute_metrics(agg_ret, agg_pos)
             rows.append({"combo": combo_str, "n_indicators": n_ind,
                          "logic": logic, "scope": "OVERALL", **m})

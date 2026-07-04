@@ -1,5 +1,14 @@
 .venv*/
 __pycache__/
 *.pyc
-data/cache/
 *.log
+
+# Large data files — hosted on Hugging Face Spaces, not GitHub
+data/backtest_results.parquet
+data/ohlcv_cache/
+data/signal_cache/
+data/full_run.log
+
+# Google OAuth tokens — never commit these
+credentials.json
+token.json

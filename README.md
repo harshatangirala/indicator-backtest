@@ -1,18 +1,19 @@
-# 15-Indicator Combination Backtester
+# 23-Indicator Combination Backtester
 
-Backtests every 1–4 indicator combination drawn from a 15-indicator pool (1,940
-combinations total) against the NSE "master universe" of ~330 Nifty-listed
-stocks, daily data from 2009-01-01 onward, under both **strict-AND** and
-**majority-vote** signal logic. Results are aggregated per-stock and across
-the overall market.
+Backtests every 1–4 indicator combination drawn from a 23-indicator pool
+(10,902 combinations total — C(23,1)+C(23,2)+C(23,3)+C(23,4)) against the NSE
+"master universe" of ~330 Nifty-listed stocks, daily data from 2009-01-01
+onward, under both **strict-AND** and **majority-vote** signal logic. Results
+are aggregated per-stock and across the overall market.
 
 ## Indicators
 
-SMA, EMA, MACD, Parabolic SAR, RSI, Stochastic Oscillator, CCI, ROC,
-Bollinger Bands, ATR, SuperTrend, OBV, Chaikin Money Flow, Volume RSI,
-Ichimoku Cloud — each reduced to a `-1` (sell) / `0` (neutral) / `1` (buy)
-signal per day. Combinations of 2–4 indicators are combined either by
-requiring unanimous agreement (AND) or majority vote.
+SMA and EMA at 5 timeframes each (9/20/30/100/200), MACD, Parabolic SAR, ROC,
+SuperTrend, RSI, Stochastic Oscillator, CCI, Bollinger Bands, ATR, OBV,
+Chaikin Money Flow, Volume RSI, and Ichimoku Cloud — 23 indicators in total,
+each reduced to a `-1` (sell) / `0` (neutral) / `1` (buy) signal per day.
+Combinations of 1–4 indicators are combined either by requiring unanimous
+agreement (AND) or majority vote.
 
 ## Project layout
 
@@ -58,6 +59,103 @@ To run just the dashboard against the already-committed `data/backtest_results.p
 ## Notes
 
 This is a research/screening tool, not investment advice. Signal rules use
-fixed, commonly-cited thresholds (e.g. RSI 30/70, Bollinger 2σ) rather than
-optimized parameters, and backtests do not account for transaction costs,
-slippage, or taxes.
+fixed, commonly-cited parameters (e.g. RSI/Stochastic/CCI momentum midpoints,
+Bollinger 2σ) rather than optimized ones, and backtests do not account for
+transaction costs, slippage, or taxes.
+
+## What was fixed in this pass
+
+A full read-through of `constants.py`, `engine.py`, and `app.py`, cross-checked
+against hand-built known-answer test cases and an independent reference
+implementation (`ta`), turned up four concrete, demonstrable defects. All four
+are fixed as of this pass:
+
+1. **`.gitignore` didn't actually match the cache directories the code
+   writes to, so the per-ticker OHLCV/signal cache was NOT gitignored.**
+   `constants.py` defines the cache paths as `data/cache/ohlcv/` and
+   `data/cache/signals/`, but `.gitignore` listed `data/ohlcv_cache/` and
+   `data/signal_cache/` — directories the code never creates. Running
+   `engine.py` and checking `git status` confirmed `data/cache/` showed up
+   as untracked, i.e. a plain `git add` would have swept hundreds of
+   per-stock parquet files into the repo (this is exactly what commit
+   `a40edbb` had to clean up after — a large parquet accidentally committed).
+   Fixed by changing the ignore rule to `data/cache/`, matching what
+   `constants.py` actually uses.
+
+2. **RSI (and Volume RSI, which reuses the same helper) went silently NaN
+   during uninterrupted rallies instead of reporting maximal bullishness.**
+   In `engine.py`'s `_rsi_value()`, when a 14-day window contains zero
+   down-days (`avg_loss == 0` — e.g. an uninterrupted rally, or an NSE
+   small/mid-cap stuck on upper circuit for several days in a row, which the
+   test universe demonstrably produces), the old code did
+   `avg_gain / avg_loss.replace(0, np.nan)`, turning the division into NaN
+   and propagating NaN through the whole RSI/sign calculation. The
+   mathematically correct value when there are only gains is RSI = 100 (and
+   RSI = 50 on a perfectly flat, no-change series), not "no signal." Verified
+   with a hand-built monotonically-increasing 30-day price series: RSI
+   incorrectly stayed `NaN` before the fix and correctly reports `100.0`
+   after. Fixed by special-casing `avg_loss == 0`.
+
+3. **Chaikin Money Flow: one circuit-locked day silently blanked out the
+   next ~19 days of signal.** In `engine.py`'s `sig_cmf()`, the per-day
+   money-flow-multiplier `((c-l)-(h-c))/(h-l)` is 0/0 on any day where
+   High == Low (a circuit-locked or completely illiquid session — confirmed
+   6–17 such days per stock even in this large/mid-cap sample). That was
+   turned into NaN, which then fed a 20-day `rolling().sum()`; pandas'
+   rolling sum returns NaN for the *entire window* if any single day inside
+   it is NaN. Measured effect on one real stock (ABB.NS, 4312 trading days):
+   8 flat days produced 178 NaN CMF days, versus the ~19 expected purely from
+   the indicator's warm-up. Fixed by treating a zero-range day's
+   money-flow-multiplier as 0 (no accumulation/distribution — the
+   conventional treatment) instead of NaN, so it no longer contaminates
+   the rolling window. Re-measured after the fix: 19 NaN days (warm-up
+   only), down from 178.
+
+4. **Global Overview and Stock Analysis tabs crashed whenever a ranked
+   top-N list contained the same combo string twice under different logic.**
+   Both tabs did `top10[DISPLAY_COLS].set_index("combo")` /
+   `top5[DISPLAY_COLS].set_index("combo")` before handing the frame to
+   `style_table()`, which applies `Styler.background_gradient()`. For a
+   2-indicator combo, AND and MAJORITY produce identical results (majority
+   of 2 requires both to agree, same as AND), so the same combo string with
+   two different `logic` values can legitimately both land in the same
+   top-10/top-5 slice — producing a duplicate index value. pandas' Styler
+   raises `KeyError: Styler.apply and .map are not compatible with
+   non-unique index` in that case, which crashed the whole tab. Reproduced
+   live: ran the 5-ticker smoke test, ranked Global Overview by CAGR, and
+   `EMA9+OBV` appeared in the top 10 under both AND and MAJORITY with
+   identical `cagr` — the tab crashed with exactly that KeyError before the
+   fix. Fixed with a shared `combo_display_table()` helper that folds
+   `logic` into the row label (`"COMBO  [LOGIC]"`), which is guaranteed
+   unique since `(combo, logic)` pairs are unique by construction in
+   `engine.py`'s output. Re-tested every ranking metric on both tabs (via
+   Streamlit's `AppTest` harness) after the fix — all clean.
+
+5. **Stale "15 indicators / 1,940 combinations" claims throughout the
+   README and dashboard, contradicting the actual 23-indicator / 10,902
+   combination engine.** The repo evolved from an earlier 15-indicator
+   design to the current 23-indicator one (see commit `00c9f7f`,
+   "Overhaul: 23 indicators..."), but the top-level README title/intro,
+   `app.py`'s module docstring, and its page header (`st.markdown("##
+   📈 15-Indicator...")`) were never updated — while `app.py`'s own caption
+   two lines below the stale header correctly says "10,902 combinations
+   (1–4 indicators from a pool of 23)," an internal self-contradiction on
+   the same page. `engine.py`'s own `math.comb` assertion already confirms
+   the code generates all `C(23,1)+C(23,2)+C(23,3)+C(23,4) = 10,902`
+   combinations correctly — only the documentation and page header text
+   were wrong. Fixed by updating the README title/intro/indicator list and
+   `app.py`'s docstring and header to say 23 indicators / 10,902
+   combinations, consistent with the code.
+
+**Verified but found correct, not a bug:** Wilder's RSI/ATR smoothing (via
+`.ewm(alpha=1/window, adjust=False)`) was cross-checked against the `ta`
+library and converges to identical steady-state values (differences only in
+the first few warm-up bars, from a different seeding convention, not a
+formula error). The AND/MAJORITY combination logic, the 1-bar execution lag
+(`np.roll(combo_sig, 1, axis=0)` — a signal computed from data through the
+close of day T only enters a position for day T+1's return, so there is no
+look-ahead bias), the Parabolic SAR band-flip/acceleration-reset logic
+(traced by hand against a small synthetic reversal), and the Ichimoku Cloud's
+`.shift(displacement)` (which correctly lags Senkou Span A/B so that "today's
+cloud" reflects what was projected 26 days ago, not future data) were all
+checked closely and found to already do the right thing.

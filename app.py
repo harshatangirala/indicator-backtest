@@ -1,5 +1,5 @@
 """
-app.py — Streamlit dashboard for the 15-indicator combination backtest.
+app.py — Streamlit dashboard for the 23-indicator combination backtest.
 
 Every query uses parquet predicate pushdown — only the small slice needed for a
 given tab is ever materialised in memory (keeps the app inside free-tier limits).
@@ -197,10 +197,29 @@ def indicator_category(ind: str) -> str:
     return INDICATOR_INFO.get(ind, {}).get("category", "Other")
 
 
+def combo_display_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Build the ranked combo table indexed for display.
+
+    Indexing directly on "combo" breaks whenever the same combo string
+    appears twice in the same ranked slice under different logic — which
+    happens routinely, since a 2-indicator combo's AND and MAJORITY results
+    are mathematically identical (majority-of-2 == unanimous-of-2), so both
+    rows can independently rank into the same top-N list. pandas' Styler
+    (used by style_table for the colour gradients) raises
+    "Styler.apply and .map are not compatible with non-unique index" in that
+    case, crashing the tab. Folding logic into the row label guarantees a
+    unique index, since (combo, logic) pairs are unique by construction in
+    engine.py's output."""
+    out = df[DISPLAY_COLS].copy()
+    out.index = out["combo"].astype(str) + "  [" + out["logic"].astype(str) + "]"
+    out.index.name = "combo"
+    return out.drop(columns=["combo"])
+
+
 # --------------------------------------------------------------------------- #
 # Page header
 # --------------------------------------------------------------------------- #
-st.markdown("## 📈 15-Indicator Combination Backtester")
+st.markdown("## 📈 23-Indicator Combination Backtester")
 st.caption(
     "10,902 combinations (1–4 indicators from a pool of 23) × AND + MAJORITY logic × "
     "Nifty master universe — 17 years of daily data, 2009–2026."
@@ -316,7 +335,7 @@ with tab_global:
             f"Green = strong on that metric · Red = weak. Max Drawdown: less negative = greener."
         )
 
-        disp = top10[DISPLAY_COLS].set_index("combo")
+        disp = combo_display_table(top10)
         st.dataframe(style_table(disp), width="stretch", height=380)
 
         # Bar chart
@@ -440,7 +459,7 @@ with tab_stock:
     else:
         top5 = stock_df.sort_values(s_metric_col, ascending=False).head(5)
         st.markdown(f"**Top 5 combinations for {chosen_label}**")
-        st.dataframe(style_table(top5[DISPLAY_COLS].set_index("combo")),
+        st.dataframe(style_table(combo_display_table(top5)),
                      width="stretch", height=220)
         summary_box(
             f"These 5 combinations had the highest <strong>{s_metric_label}</strong> when applied to "

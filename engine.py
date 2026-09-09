@@ -128,14 +128,26 @@ def download_ohlcv(ticker: str, start: str = START_DATE, end: str = END_DATE,
 # --------------------------------------------------------------------------- #
 
 def _rsi_value(series: pd.Series, window: int = 14) -> pd.Series:
-    """Wilder's RSI, reused for price-RSI and Volume-RSI."""
+    """Wilder's RSI, reused for price-RSI and Volume-RSI.
+
+    When avg_loss == 0 (no down-moves inside the smoothing window — e.g. an
+    uninterrupted multi-day rally or an NSE upper-circuit run), the naive
+    avg_gain/avg_loss ratio divides by zero. Replacing that 0 with NaN (the
+    old behaviour) propagated NaN into RSI itself, silently killing the
+    RSI/Volume-RSI signal for the entire zero-loss streak instead of
+    reporting the mathematically correct saturated value of 100 (all gains,
+    maximally bullish). Flat series (avg_gain == avg_loss == 0, e.g. a
+    circuit-locked stock with no price change at all) resolve to the neutral
+    midpoint of 50 rather than NaN."""
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
     avg_loss = loss.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.where(avg_loss != 0, np.where(avg_gain > 0, 100.0, 50.0))
+    return rsi
 
 
 def sig_sma(c: pd.Series, period: int) -> pd.Series:
@@ -303,8 +315,22 @@ def sig_obv(c: pd.Series, v: pd.Series, window: int = 20) -> pd.Series:
 
 def sig_cmf(h: pd.Series, l: pd.Series, c: pd.Series, v: pd.Series,
             window: int = 20) -> pd.Series:
-    """Chaikin Money Flow: positive = buying pressure, negative = selling."""
+    """Chaikin Money Flow: positive = buying pressure, negative = selling.
+
+    On a zero-range day (High == Low — a circuit-locked or completely
+    illiquid session, which happens repeatedly even in this large/mid-cap
+    NSE sample), the money-flow-multiplier (c-l)-(h-c) / (h-l) is 0/0.
+    That used to be turned into NaN, which then poisoned the whole 20-day
+    rolling sum feeding CMF: pandas' rolling().sum() returns NaN for any
+    window containing a NaN, so ONE flat day silently blanked out the CMF
+    signal for up to the next 19 trading days too (measured: 8 flat days in
+    one stock's 4312-day history produced 178 NaN days, not the ~19 expected
+    from warm-up alone). A zero-range day carries no directional information,
+    so its money-flow-multiplier is conventionally treated as 0 (no
+    accumulation/distribution) rather than NaN — the volume still counts in
+    the denominator, but contributes nothing to the numerator."""
     mfm = ((c - l) - (h - c)) / (h - l).replace(0, np.nan)
+    mfm = mfm.fillna(0.0)
     mfv = mfm * v
     cmf = mfv.rolling(window).sum() / v.rolling(window).sum()
     return np.sign(cmf)

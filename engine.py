@@ -45,13 +45,30 @@ Run:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# If Streamlit Cloud's "main file path" ever gets pointed at this file instead
+# of app.py, launching it as `streamlit run engine.py` would otherwise kick off
+# the full multi-hour backtest pipeline inside a web request (no UI, no output,
+# eventual timeout). Detect that case and delegate straight to the real
+# dashboard instead.
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+except ImportError:
+    get_script_run_ctx = None
+
+if get_script_run_ctx is not None and get_script_run_ctx() is not None:
+    import runpy
+
+    runpy.run_path(str(Path(__file__).parent / "app.py"), run_name="__main__")
+    sys.exit(0)
+
 import argparse
 import itertools
 import logging
-import sys
 import time
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
